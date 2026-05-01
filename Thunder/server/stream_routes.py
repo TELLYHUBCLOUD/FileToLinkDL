@@ -19,7 +19,7 @@ routes = web.RouteTableDef()
 
 SECURE_HASH_LENGTH = 6
 CHUNK_SIZE = 1024 * 1024
-MAX_CONCURRENT_PER_CLIENT = 8
+MAX_CONCURRENT_PER_CLIENT = 16
 RANGE_REGEX = re.compile(r"bytes=(?P<start>\d*)-(?P<end>\d*)")
 PATTERN_HASH_FIRST = re.compile(
     rf"^([a-zA-Z0-9_-]{{{SECURE_HASH_LENGTH}}})(\d+)(?:/.*)?$")

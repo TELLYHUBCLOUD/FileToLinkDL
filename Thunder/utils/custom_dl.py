@@ -1,6 +1,7 @@
 # Thunder/utils/custom_dl.py
 
 import asyncio
+from collections import OrderedDict
 from typing import Any, AsyncGenerator, Dict
 
 from pyrogram import Client
@@ -14,7 +15,12 @@ from Thunder.vars import Var
 
 
 class ByteStreamer:
-    __slots__ = ('client', 'chat_id')
+    __slots__ = ('client', 'chat_id', '_info_cache')
+
+    # Shared across instances per client — cache file info to avoid
+    # re-fetching the same message metadata from Telegram repeatedly.
+    _CACHE_MAX = 512
+    _shared_cache: OrderedDict = OrderedDict()
 
     def __init__(self, client: Client) -> None:
         self.client = client
@@ -47,16 +53,36 @@ class ByteStreamer:
         if limit > 0:
             chunk_limit = ((limit + (1024 * 1024) - 1) // (1024 * 1024)) + 1
 
-        while True:
+        # Prefetch buffer: read-ahead one chunk so the next chunk is
+        # ready to send while the current one is being transmitted.
+        PREFETCH_SIZE = 4
+        buffer: asyncio.Queue = asyncio.Queue(maxsize=PREFETCH_SIZE)
+
+        async def _producer():
             try:
                 async for chunk in self.client.stream_media(
                     message, offset=chunk_offset, limit=chunk_limit
                 ):
-                    yield chunk
-                break
-            except FloodWait as e:
-                logger.debug(f"FloodWait: stream_file, sleep {e.value}s")
-                await asyncio.sleep(e.value)
+                    await buffer.put(chunk)
+                await buffer.put(None)  # sentinel
+            except Exception as e:
+                await buffer.put(e)
+
+        producer_task = asyncio.create_task(_producer())
+        try:
+            while True:
+                item = await buffer.get()
+                if item is None:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            producer_task.cancel()
+            try:
+                await producer_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     def get_file_info_sync(self, message: Message) -> Dict[str, Any]:
         media = get_media(message)
@@ -98,9 +124,19 @@ class ByteStreamer:
         }
 
     async def get_file_info(self, message_id: int) -> Dict[str, Any]:
+        # Check shared cache first
+        cache_key = f"{self.chat_id}:{message_id}"
+        if cache_key in ByteStreamer._shared_cache:
+            ByteStreamer._shared_cache.move_to_end(cache_key)
+            return ByteStreamer._shared_cache[cache_key]
         try:
             message = await self.get_message(message_id)
-            return self.get_file_info_sync(message)
+            info = self.get_file_info_sync(message)
+            # Store in cache
+            ByteStreamer._shared_cache[cache_key] = info
+            if len(ByteStreamer._shared_cache) > ByteStreamer._CACHE_MAX:
+                ByteStreamer._shared_cache.popitem(last=False)
+            return info
         except Exception as e:
             logger.debug(f"Error getting file info for {message_id}: {e}", exc_info=True)
             return {"message_id": message_id, "error": str(e)}
