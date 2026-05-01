@@ -5,7 +5,7 @@ import secrets
 from typing import Any, Dict, Optional
 
 from pyrogram import Client, enums, filters
-from pyrogram.errors import FloodWait, MessageNotModified, MessageDeleteForbidden, MessageIdInvalid
+from pyrogram.errors import FloodWait, MessageNotModified, MessageDeleteForbidden, MessageIdInvalid, ButtonUrlInvalid
 from pyrogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
                             Message)
 
@@ -56,6 +56,7 @@ async def fwd_media(m_msg: Message) -> Optional[Message]:
 
 
 def get_link_buttons(links):
+    logger.debug(f"Creating buttons with URLs — stream: {links['stream_link']} | download: {links['online_link']}")
     return InlineKeyboardMarkup([[
         InlineKeyboardButton(MSG_BUTTON_STREAM_NOW, url=links['stream_link']),
         InlineKeyboardButton(MSG_BUTTON_DOWNLOAD, url=links['online_link'])
@@ -156,33 +157,52 @@ async def send_dm_links(bot: Client, user_id: int, links: Dict[str, Any], chat_t
 
 
 async def send_link(msg: Message, links: Dict[str, Any]):
+    link_text = MSG_LINKS.format(
+        file_name=links['media_name'],
+        file_size=links['media_size'],
+        download_link=links['online_link'],
+        stream_link=links['stream_link']
+    )
     try:
-        await msg.reply_text(
-            MSG_LINKS.format(
-                file_name=links['media_name'],
-                file_size=links['media_size'],
-                download_link=links['online_link'],
-                stream_link=links['stream_link']
-            ),
-            quote=True,
-            parse_mode=enums.ParseMode.MARKDOWN,
-            disable_web_page_preview=True,
-            reply_markup=get_link_buttons(links)
+        try:
+            await msg.reply_text(
+                link_text,
+                quote=True,
+                parse_mode=enums.ParseMode.MARKDOWN,
+                disable_web_page_preview=True,
+                reply_markup=get_link_buttons(links)
+            )
+        except FloodWait as e:
+            await asyncio.sleep(e.value)
+            await msg.reply_text(
+                link_text,
+                quote=True,
+                parse_mode=enums.ParseMode.MARKDOWN,
+                disable_web_page_preview=True,
+                reply_markup=get_link_buttons(links)
+            )
+    except ButtonUrlInvalid:
+        # Fallback: send text-only links without inline buttons
+        logger.error(
+            f"ButtonUrlInvalid — URLs rejected by Telegram. "
+            f"stream={links['stream_link']} | download={links['online_link']}. "
+            f"Check FQDN env var (current: '{Var.FQDN}', URL: '{Var.URL}')."
         )
-    except FloodWait as e:
-        await asyncio.sleep(e.value)
-        await msg.reply_text(
-            MSG_LINKS.format(
-                file_name=links['media_name'],
-                file_size=links['media_size'],
-                download_link=links['online_link'],
-                stream_link=links['stream_link']
-            ),
-            quote=True,
-            parse_mode=enums.ParseMode.MARKDOWN,
-            disable_web_page_preview=True,
-            reply_markup=get_link_buttons(links)
-        )
+        try:
+            await msg.reply_text(
+                link_text,
+                quote=True,
+                parse_mode=enums.ParseMode.MARKDOWN,
+                disable_web_page_preview=True
+            )
+        except FloodWait as e:
+            await asyncio.sleep(e.value)
+            await msg.reply_text(
+                link_text,
+                quote=True,
+                parse_mode=enums.ParseMode.MARKDOWN,
+                disable_web_page_preview=True
+            )
 
 
 @StreamBot.on_message(filters.command("link") & ~filters.private)
