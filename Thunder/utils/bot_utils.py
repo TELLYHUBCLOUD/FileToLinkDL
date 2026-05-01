@@ -1,8 +1,9 @@
 # Thunder/utils/bot_utils.py
 
 import asyncio
+import re
 from typing import Any, Dict, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from pyrogram import Client
 from pyrogram.enums import ChatMemberStatus
@@ -84,10 +85,24 @@ async def gen_links(fwd_msg: Message, shortener: bool = True) -> Dict[str, str]:
     m_name_raw = get_fname(fwd_msg)
     m_name = m_name_raw.decode('utf-8', errors='replace') if isinstance(m_name_raw, bytes) else str(m_name_raw)
     m_size_hr = humanbytes(get_fsize(fwd_msg))
-    enc_fname = quote(m_name)
+    # Use safe='' to encode ALL special characters including forward slashes
+    # that may appear in filenames — Telegram rejects URLs with unencoded slashes in the path
+    enc_fname = quote(m_name, safe='')
     f_hash = get_hash(fwd_msg)
+    if not f_hash:
+        logger.warning(f"Empty hash for message {fid}, media may lack file_unique_id")
+        f_hash = "000000"
     slink = f"{base_url}/watch/{f_hash}{fid}/{enc_fname}"
     olink = f"{base_url}/{f_hash}{fid}/{enc_fname}"
+    
+    # Validate that URLs are valid for Telegram inline buttons
+    for label, link in [("stream_link", slink), ("online_link", olink)]:
+        parsed = urlparse(link)
+        if not parsed.scheme or not parsed.netloc or parsed.netloc in ('0.0.0.0', '127.0.0.1', 'localhost'):
+            logger.error(
+                f"Generated {label} has invalid URL: {link} — "
+                f"FQDN is '{Var.FQDN}', check your FQDN environment variable"
+            )
     
     if shortener and getattr(Var, "SHORTEN_MEDIA_LINKS", False):
         try:
