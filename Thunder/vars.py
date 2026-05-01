@@ -53,7 +53,24 @@ class Var:
     if not OWNER_ID:
         logger.warning("WARNING: OWNER_ID is not set. No user will be granted owner access.")
 
-    FQDN: str = os.getenv("FQDN", "") or BIND_ADDRESS
+    # Auto-detect FQDN: user-set > Render's RENDER_EXTERNAL_URL > BIND_ADDRESS
+    _fqdn_env: str = os.getenv("FQDN", "").strip()
+    _render_url: str = os.getenv("RENDER_EXTERNAL_URL", "").strip()
+    if _fqdn_env:
+        FQDN: str = _fqdn_env
+    elif _render_url:
+        # Extract hostname from Render's URL (e.g. https://app-name.onrender.com)
+        from urllib.parse import urlparse as _urlparse
+        _parsed = _urlparse(_render_url)
+        FQDN: str = _parsed.hostname or BIND_ADDRESS
+        logger.info(f"Auto-detected FQDN from RENDER_EXTERNAL_URL: {FQDN}")
+    else:
+        FQDN: str = BIND_ADDRESS
+        if FQDN in ("0.0.0.0", "127.0.0.1", "localhost"):
+            logger.warning(
+                f"FQDN is '{FQDN}' — Telegram will reject button URLs! "
+                f"Set FQDN env var to your public domain."
+            )
     HAS_SSL: bool = str_to_bool(os.getenv("HAS_SSL", "True"))
     PROTOCOL: str = "https" if HAS_SSL else "http"
     PORT_SEGMENT: str = "" if NO_PORT else f":{PORT}"
